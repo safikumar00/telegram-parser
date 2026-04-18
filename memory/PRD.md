@@ -33,6 +33,19 @@ provenance via upsert on telegram_id. Strict pipeline with logs at every step.
 - [x] README with schema, webhook setup, BotFather steps, debugging guide
 - [x] Parser validated against the specified test case + 5 additional real-world inputs
 
+## Tasks done (2026-02-xx, Phase 2 — Profit Engine)
+
+- [x] Schema migration documented: `signals.result_percent`, `signals.closed_at`, `channel_stats` table + indexes
+- [x] `services/prices.ts` — Binance `getCurrentPrice(pair)` with `normalizePair()`, AbortController timeout, null-on-failure
+- [x] `services/evaluator.ts` — pure `evaluateSignal(signal, price)`: win / loss / pending, 2-decimal result_percent
+- [x] `services/processor.ts` — `processSignals()` with concurrency-guarded UPDATE (`status='pending'` filter) + touched-channel stats refresh
+- [x] `services/stats.ts` — `computeChannelStats`, `refreshChannelStats`, `listChannelStats`
+- [x] `/api/cron/process` route (`runtime=nodejs`, `maxDuration=60`, `CRON_SECRET` bearer/query support)
+- [x] `vercel.json` with `*/3 * * * *` cron on `/api/cron/process`
+- [x] `scripts/worker.ts` — Node `setInterval` fallback, `yarn worker`
+- [x] Dashboard upgrade — 5 KPIs (Ingested, Channels, Wins, Losses, Win rate), coloured status badges, result %, closed_at, `ProcessorControls` client component, `ChannelPerformance` panel
+- [x] Evaluator verified against the spec matrix: @64000 → win +3.23%, @61500 → loss -0.81%, @63000 → pending ✓
+
 ## Core requirements (static)
 
 1. Deterministic parser, no AI APIs.

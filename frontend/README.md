@@ -1,8 +1,7 @@
-# SignalOS — Phase 1 (Signal Ingestion System)
+# SignalOS — Phase 1 + Phase 2
 
-A production-grade ingestion layer for Telegram trading signals.
-
-Telegram → Telegraf → deterministic parser → Supabase (Postgres).
+Phase 1 · **Signal Ingestion** — Telegram → deterministic parser → Supabase.
+Phase 2 · **Profit Engine** — pending signals → evaluated outcomes → channel analytics.
 
 ---
 
@@ -10,8 +9,8 @@ Telegram → Telegraf → deterministic parser → Supabase (Postgres).
 
 - Next.js 14 (App Router) · TypeScript (strict)
 - Tailwind CSS · shadcn/ui
-- Supabase (Postgres + `@supabase/supabase-js`)
-- Telegraf (Telegram Bot)
+- Supabase (Postgres)
+- Telegraf · Binance public ticker
 
 ---
 
@@ -21,31 +20,41 @@ Telegram → Telegraf → deterministic parser → Supabase (Postgres).
 signal-os/                 (this app lives in /app/frontend)
 ├── app/
 │   ├── (landing)/
-│   │   ├── page.tsx       ← marketing landing
+│   │   ├── page.tsx
 │   │   └── layout.tsx
 │   ├── dashboard/
-│   │   ├── page.tsx       ← signal dashboard
+│   │   ├── page.tsx                 ← upgraded in Phase 2
 │   │   └── layout.tsx
 │   ├── api/
-│   │   ├── telegram/
-│   │   │   └── route.ts   ← Telegram webhook
-│   │   └── signals/
-│   │       └── route.ts   ← read API (for tests)
+│   │   ├── telegram/route.ts        ← Telegram webhook (Phase 1)
+│   │   ├── signals/route.ts         ← read API (Phase 1)
+│   │   └── cron/
+│   │       └── process/route.ts     ← Phase 2 · evaluator cron
 │   ├── globals.css
 │   └── layout.tsx
 ├── components/
-│   ├── ui/                ← shadcn (button, card, table, badge, input)
-│   └── dashboard/         ← signals-table, parser-playground
+│   ├── ui/                          ← shadcn primitives
+│   └── dashboard/
+│       ├── signals-table.tsx        ← status colours + result %
+│       ├── channel-performance.tsx  ← Phase 2
+│       ├── processor-controls.tsx   ← Phase 2 · manual cron trigger
+│       └── parser-playground.tsx
 ├── lib/
 │   ├── supabase.ts
 │   ├── parser.ts
 │   └── utils.ts
 ├── services/
-│   ├── telegram.ts
-│   ├── signals.ts
-│   └── channels.ts
-├── types/
-│   └── index.ts
+│   ├── telegram.ts                  ← Phase 1
+│   ├── signals.ts                   ← Phase 1
+│   ├── channels.ts                  ← Phase 1
+│   ├── prices.ts                    ← Phase 2 · Binance
+│   ├── evaluator.ts                 ← Phase 2 · pure eval logic
+│   ├── processor.ts                 ← Phase 2 · cron driver
+│   └── stats.ts                     ← Phase 2 · channel analytics
+├── scripts/
+│   └── worker.ts                    ← Phase 2 · Node interval fallback
+├── types/index.ts
+├── vercel.json                      ← Phase 2 · Vercel Cron config
 ├── .env.local
 ├── tailwind.config.ts
 └── components.json
@@ -55,21 +64,23 @@ signal-os/                 (this app lives in /app/frontend)
 
 ## 1 · Environment variables
 
-Create `.env.local`:
-
 ```
 NEXT_PUBLIC_SUPABASE_URL=https://<project>.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon-key>
 TELEGRAM_BOT_TOKEN=<bot-token>
+CRON_SECRET=<random-string>              # optional, recommended for Phase 2
+PROCESSOR_INTERVAL_MS=180000             # optional, worker-only (default 3 min)
 ```
 
-None of these have defaults in code. Missing values fail loudly at runtime.
+`CRON_SECRET` is checked by `/api/cron/process`:
+- `Authorization: Bearer <CRON_SECRET>` (Vercel Cron format), or
+- `?secret=<CRON_SECRET>` in the URL.
 
 ---
 
 ## 2 · Supabase schema
 
-Run in the Supabase SQL editor:
+### Phase 1 (baseline)
 
 ```sql
 create table channels (
@@ -91,138 +102,184 @@ create table signals (
 );
 ```
 
-> `telegram_id` is `unique` so `getOrCreateChannel` can upsert safely.
+### Phase 2 (migration)
 
-If you enable Row-Level Security, either:
-- keep RLS **off** on these tables for server-side inserts with the anon key, or
-- use a service-role key from server code (update `lib/supabase.ts` accordingly).
+Add two columns to `signals`, plus a materialized stats table.
+
+```sql
+alter table signals add column if not exists result_percent float;
+alter table signals add column if not exists closed_at timestamp;
+
+create table if not exists channel_stats (
+  id uuid primary key default gen_random_uuid(),
+  channel_id uuid references channels(id) unique,
+  win_rate float,
+  avg_profit float,
+  total_trades int,
+  updated_at timestamp default now()
+);
+
+-- Keep pending-scan cheap on very large ledgers
+create index if not exists signals_status_idx on signals(status);
+create index if not exists signals_channel_idx on signals(channel_id);
+```
+
+The `unique` constraint on `channel_stats.channel_id` lets the processor
+`upsert` with `onConflict: "channel_id"` — no duplicate rows.
 
 ---
 
-## 3 · Telegram bot setup
+## 3 · Evaluator contract
 
-1. **Create a bot:** DM [@BotFather](https://t.me/BotFather) → `/newbot` → copy token.
-2. **Add to a channel / group** as a member.
-3. **Promote to admin** (this is required).
-4. **Enable message reading**: `/setprivacy` → **Disable** (so the bot can read all messages in groups).
-5. Paste the token into `.env.local` as `TELEGRAM_BOT_TOKEN`.
+`evaluateSignal(signal, currentPrice)` is a **pure function**.
 
-### Webhook registration (production)
+| Scenario                           | Output status | result_percent                               |
+|------------------------------------|---------------|----------------------------------------------|
+| `currentPrice >= take_profit`      | `win`         | `((TP - entry) / entry) * 100`, rounded 2dp  |
+| `currentPrice <= stop_loss`        | `loss`        | `((SL - entry) / entry) * 100`, rounded 2dp  |
+| neither                            | `pending`     | `null`                                       |
+| already closed (`status != pending`) | unchanged   | `null` (caller ignores)                      |
+| invalid inputs (null/NaN)          | `pending`     | `null`                                       |
 
-Once deployed (e.g. Vercel):
+### Test matrix (verified)
 
-```bash
-curl -s "https://api.telegram.org/bot<TOKEN>/setWebhook?url=https://<your-domain>/api/telegram"
+Signal: `BTCUSDT entry 62000 SL 61500 TP 64000`
+
+| Price  | Status   | result_percent |
+|--------|----------|----------------|
+| 64000  | `win`    | `+3.23`        |
+| 61500  | `loss`   | `-0.81`        |
+| 63000  | `pending`| `null`         |
+
+---
+
+## 4 · Price service (Binance)
+
+`getCurrentPrice(pair)` hits `GET https://api.binance.com/api/v3/ticker/price?symbol=...`.
+
+- `normalizePair()`: `BTC` → `BTCUSDT`, `BTC/USDT` → `BTCUSDT`, `ethusdc` → `ETHUSDC`.
+- 4-second AbortController timeout. No retries — the next cron tick is the retry.
+- Returns `null` on any failure (network, HTTP 4xx/5xx, invalid pair, parse).
+
+> Note: Binance blocks some cloud regions with HTTP 451. If you see that, route
+> the processor through a region Binance allows (Vercel default regions work)
+> or swap in CoinGecko by reimplementing `getCurrentPrice`.
+
+---
+
+## 5 · Processor (cron)
+
+`processSignals()` runs the strict pipeline for every pending row:
+
+```
+fetch pending (limit 200)
+  → for each:
+      Processing signal        ← console.log
+      Fetched price            ← console.log
+      Evaluation result        ← console.log
+      DB update result         ← console.log (guarded on status='pending')
+  → refresh channel_stats for each touched channel
 ```
 
-Verify:
+**Concurrency-safe update:** the `UPDATE` filters by `id` **and** `status='pending'`
+so a second concurrent runner cannot re-close the same signal.
 
-```bash
-curl -s "https://api.telegram.org/bot<TOKEN>/getWebhookInfo"
+### Option A — Vercel Cron (preferred)
+
+`vercel.json` already contains:
+
+```json
+{ "crons": [{ "path": "/api/cron/process", "schedule": "*/3 * * * *" }] }
 ```
 
-### Polling (local development)
+Set `CRON_SECRET` in Vercel → Settings → Environment Variables. Vercel Cron
+sends `Authorization: Bearer <CRON_SECRET>` automatically.
 
-The webhook handler is always available. If you want long-polling locally, add a tiny script:
+### Option B — Supabase Edge Function (scheduled)
 
 ```ts
-// scripts/dev-bot.ts
-import { getBot } from "@/services/telegram";
-getBot().launch();
+// supabase/functions/process-signals/index.ts
+Deno.serve(async () => {
+  const r = await fetch(`${Deno.env.get("APP_URL")}/api/cron/process`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${Deno.env.get("CRON_SECRET")}` },
+  });
+  return new Response(await r.text(), { status: r.status });
+});
 ```
 
-…and run it with `tsx scripts/dev-bot.ts`.
+Schedule with `supabase functions schedule create process-signals --cron "*/3 * * * *"`.
+
+### Option C — Node interval worker (self-hosted)
+
+```
+yarn worker
+```
+
+Runs `processSignals()` every `PROCESSOR_INTERVAL_MS` (default 3 min).
 
 ---
 
-## 4 · Install & run
+## 6 · Channel stats
+
+`computeChannelStats(channel_id)` returns:
+
+```ts
+{
+  win_rate:    (wins / closed_trades) * 100,   // rounded 2dp
+  avg_profit:  mean(result_percent),           // rounded 2dp
+  total_trades: closed_trades_count,           // pending excluded
+}
+```
+
+`refreshChannelStats(channel_id)` additionally upserts into `channel_stats`
+so the dashboard reads pre-aggregated rows instead of scanning `signals`.
+
+`listChannelStats()` joins `channel_stats` with `channels` for the UI.
+
+---
+
+## 7 · Run / build
 
 ```bash
 cd /app/frontend
 yarn install
 yarn dev         # next dev -H 0.0.0.0 -p 3000
-```
-
-Build check:
-
-```bash
-yarn build
-yarn start:prod
+yarn build       # production build
+yarn worker      # optional: local cron worker
 ```
 
 Pages:
 
 - `/` — landing
-- `/dashboard` — live signal table + parser sandbox
-- `/api/telegram` — webhook endpoint (POST)
-- `/api/signals` — JSON read (GET)
+- `/dashboard` — ledger + stats + parser sandbox + manual "Run processor now"
+- `POST /api/telegram` — ingestion webhook
+- `GET /api/signals` — ledger JSON
+- `GET|POST /api/cron/process` — evaluator cron (secret-protected if set)
 
 ---
 
-## 5 · Ingestion pipeline (strict)
+## 8 · Debugging Phase 2
 
-```
-Incoming message
-  → console.log "Incoming message"
-  → parseSignal()
-    → if pair==null || entry==null → ignore
-  → getOrCreateChannel(ctx)   (upsert on telegram_id)
-  → createSignal({ channel_id, pair, entry, stop_loss, take_profit })
-  → console.log "DB insert result"
-```
+- **Processor updates 0 rows**
+  - Binance reachable? Watch for `[prices] ... HTTP 451` in logs.
+  - Column exists? Rerun the Phase 2 migration in Supabase SQL.
+- **Processor closes the same signal twice**
+  - Impossible by design — the UPDATE filter includes `status='pending'`.
+    If you saw duplicates, check for manual SQL edits.
+- **Channel performance empty**
+  - It's populated only after the processor closes at least one signal.
+    Click **Run processor now** on the dashboard once there's a live pending row.
+- **Vercel Cron silent**
+  - Vercel dashboard → Cron logs. Ensure `CRON_SECRET` matches your env.
+- **Want to force-reset a signal for testing**
 
-All four log lines (`Incoming message`, `Parsed signal`, `Channel`, `DB insert result`) are emitted for every message handled.
-
----
-
-## 6 · Parser contract
-
-`parseSignal(message: string) → { pair, entry, stop_loss, take_profit }`
-
-- Uppercases + strips emojis/symbols first.
-- Pair: `BTC`, `BTCUSDT`, `BTC/USDT` → returned **without** slash.
-- Entry range `"62000 - 62500"` → first value.
-- Multiple TPs (`TP1 / TP2 / TP3`) → highest value.
-- Returns all `null` when message doesn't contain a pair + entry.
-
-### Test case
-
-```
-"🔥 BTC/USDT LONG Entry: 62000 - 62500 SL: 61500 TP1: 63000 TP2: 64000"
-```
-
-→
-
-```json
-{ "pair": "BTCUSDT", "entry": 62000, "stop_loss": 61500, "take_profit": 64000 }
-```
+  ```sql
+  update signals set status='pending', result_percent=null, closed_at=null
+  where id = '<uuid>';
+  ```
 
 ---
 
-## 7 · Debugging
-
-- **Bot posts in channel but nothing in DB**
-  - Is the bot an **admin** in that channel?
-  - Did you disable `/setprivacy` for groups?
-  - Check `/var/log/supervisor/frontend.*.log` (local) or Vercel logs for the 4 pipeline log lines.
-- **Webhook not delivering**
-  - `getWebhookInfo` → look at `last_error_message`.
-  - Ensure your domain is HTTPS (Telegram rejects HTTP).
-- **`Supabase credentials missing`**
-  - `.env.local` not loaded. Restart the dev server after editing.
-- **`channels.telegram_id` conflict**
-  - Migration missed the `unique` constraint — re-run the schema.
-
----
-
-## 8 · Deployment notes
-
-- All API routes live under `app/api/**` → fully Vercel-compatible.
-- No secrets are hardcoded; all config comes from env vars.
-- `runtime = "nodejs"` on `/api/telegram` (Telegraf requires Node APIs, not Edge).
-- `reactStrictMode` is on; `yarn build` must pass cleanly before shipping.
-
----
-
-Phase 2 (execution, analytics, replay) builds on these two tables. Don't extend
-the schema here — migrate in a new Phase 2 PR.
+Phase 3 (execution bridge, per-channel PnL replay) builds on `channel_stats`.
+Don't widen the signal schema further here — migrate in a Phase 3 PR.

@@ -21,7 +21,9 @@ export function SignalsTable({ signals }: { signals: SignalWithChannel[] }) {
             <TableHead>SL</TableHead>
             <TableHead>TP</TableHead>
             <TableHead>Status</TableHead>
+            <TableHead className="text-right">Result</TableHead>
             <TableHead>Channel</TableHead>
+            <TableHead>Closed</TableHead>
             <TableHead className="pr-6 text-right">Ingested</TableHead>
           </TableRow>
         </TableHeader>
@@ -45,13 +47,23 @@ export function SignalsTable({ signals }: { signals: SignalWithChannel[] }) {
               <TableCell>
                 <Badge
                   variant={statusVariant(s.status)}
+                  data-testid={`signal-status-${s.id}`}
                   className="rounded-full font-sans text-[10px] uppercase tracking-wider"
                 >
                   {s.status}
                 </Badge>
               </TableCell>
+              <TableCell
+                data-testid={`signal-result-${s.id}`}
+                className={`text-right ${resultColor(s.status, s.result_percent)}`}
+              >
+                {formatResult(s.result_percent)}
+              </TableCell>
               <TableCell className="font-sans text-sm text-muted-foreground">
                 {s.channel?.name ?? "—"}
+              </TableCell>
+              <TableCell className="font-sans text-xs text-muted-foreground">
+                {s.closed_at ? formatRelativeTime(s.closed_at) : "—"}
               </TableCell>
               <TableCell className="pr-6 text-right font-sans text-xs text-muted-foreground">
                 {formatRelativeTime(s.created_at)}
@@ -66,17 +78,28 @@ export function SignalsTable({ signals }: { signals: SignalWithChannel[] }) {
 
 function statusVariant(
   status: string,
-): "success" | "warning" | "info" | "secondary" {
+): "success" | "destructive" | "warning" | "secondary" {
   switch (status) {
-    case "filled":
-    case "won":
+    case "win":
       return "success";
-    case "stopped":
-    case "lost":
+    case "loss":
+      return "destructive";
+    case "pending":
       return "warning";
-    case "active":
-      return "info";
     default:
       return "secondary";
   }
+}
+
+function resultColor(status: string, pct: number | null): string {
+  if (pct === null || !Number.isFinite(pct)) return "text-muted-foreground";
+  if (status === "win") return "text-emerald-600";
+  if (status === "loss") return "text-rose-600";
+  return pct >= 0 ? "text-emerald-600" : "text-rose-600";
+}
+
+function formatResult(pct: number | null): string {
+  if (pct === null || !Number.isFinite(pct)) return "—";
+  const sign = pct > 0 ? "+" : "";
+  return `${sign}${pct.toFixed(2)}%`;
 }
