@@ -1,0 +1,10 @@
+{
+  "name": "link_share",
+  "action": "store_signal",
+  "confidence": 0.5,
+  "tags": ["informational"],
+  "conditions": [
+    { "has_url": true },
+    { "regex": "(?i)(coingecko|binance|coinbase|tradingview|twitter|x\\.com)" }
+  ]
+}

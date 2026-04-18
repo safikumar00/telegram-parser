@@ -46,6 +46,22 @@ provenance via upsert on telegram_id. Strict pipeline with logs at every step.
 - [x] Dashboard upgrade — 5 KPIs (Ingested, Channels, Wins, Losses, Win rate), coloured status badges, result %, closed_at, `ProcessorControls` client component, `ChannelPerformance` panel
 - [x] Evaluator verified against the spec matrix: @64000 → win +3.23%, @61500 → loss -0.81%, @63000 → pending ✓
 
+## Tasks done (2026-02-xx, Emergent Intelligence Engine — /app/intelligence)
+
+- [x] Parallel Python project at `/app/intelligence/` (SignalOS untouched)
+- [x] Modular package: `ingestion/`, `storage/`, `processing/`, `rules/`, `actions/`, `intel/`, `pipeline.py`
+- [x] `MessageFetcher` Protocol with `TelethonFetcher` (flood-wait safe) + deterministic `MockFetcher`
+- [x] `Repository` Protocol + `SqliteRepository` (thread-safe), portable schema.sql (messages/groups/users/signals/summaries)
+- [x] Rule engine: 7 operators (`contains`, `contains_any/all`, `regex`, `has_symbol`, `has_symbol_any`, `min_numbers`, `has_url`), JSON + YAML loader, `match_type: all|any`
+- [x] Action registry: `StoreSignalAction`, `AlertAction`, `ForwardAction` (last two are stubs)
+- [x] `SignalExtractor` with deterministic core + `PatternRegistry` (SymbolFrequencyHook) + optional `AiClassifier` hook
+- [x] `Summarizer` Protocol + `NullSummarizer` + lazy `LlmSummarizer` (Claude Sonnet 4.5 via Emergent LLM key) — **fully removable** (flag, missing key, or file deletion all degrade gracefully)
+- [x] `pipeline.py` orchestrator with incremental sync via `groups.last_message_id`
+- [x] Example scripts (`run_pipeline.py`, `fetch_historical.py`) + 6 pytest tests (all green)
+- [x] End-to-end smoke test: mock → 6 messages → 7 signals → Claude-generated summary stored ✓
+- [x] Incremental sync verified: second run fetched=0 persisted=0 ✓
+- [x] `SUMMARIZER_ENABLED=false` path verified: summaries=0, no LLM network calls ✓
+
 ## Core requirements (static)
 
 1. Deterministic parser, no AI APIs.

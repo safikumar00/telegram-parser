@@ -1,0 +1,35 @@
+- name: crypto_signal
+  action: store_signal
+  match_type: all
+  confidence: 0.9
+  tags: [crypto, signal]
+  conditions:
+    - contains_any: ["BUY", "SELL", "LONG", "SHORT"]
+    - has_symbol_any: ["BTC", "ETH", "SOL", "BNB", "XRP", "AVAX", "ARB", "OP", "DOGE", "SUI", "TON", "MATIC", "LINK"]
+    - min_numbers: 1
+
+- name: target_hit
+  action: store_signal
+  match_type: all
+  confidence: 0.7
+  tags: [crypto, follow-up]
+  conditions:
+    - contains_any: ["TP", "TARGET", "TAKE PROFIT", "TARGET HIT"]
+    - min_numbers: 1
+
+- name: stop_loss_hit
+  action: store_signal
+  match_type: all
+  confidence: 0.7
+  tags: [crypto, follow-up]
+  conditions:
+    - contains_any: ["SL HIT", "STOP LOSS HIT", "STOPPED OUT"]
+
+- name: breaking_news
+  action: store_signal
+  match_type: all
+  confidence: 0.8
+  tags: [news]
+  conditions:
+    - contains_any: ["BREAKING", "JUST IN", "ALERT"]
+    - has_url: false
