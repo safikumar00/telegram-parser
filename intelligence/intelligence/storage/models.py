@@ -37,14 +37,25 @@ class Message:
     raw_meta: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(frozen=True)
+@dataclass
 class Signal:
-    rule_name: str
-    message_id: int  # our internal messages.id, set by repo
-    group_telegram_id: int
-    matched_conditions: list[str]
-    confidence: float
-    created_at: datetime
+    def __init__(
+        self,
+        rule_name,
+        message_id,
+        group_telegram_id,
+        matched_conditions,
+        confidence,
+        created_at,
+        metadata_json=None   # ✅ ADD THIS
+    ):
+        self.rule_name = rule_name
+        self.message_id = message_id
+        self.group_telegram_id = group_telegram_id
+        self.matched_conditions = matched_conditions
+        self.confidence = confidence
+        self.created_at = created_at
+        self.metadata_json = metadata_json   # ✅ ADD THIS
 
 
 @dataclass(frozen=True)

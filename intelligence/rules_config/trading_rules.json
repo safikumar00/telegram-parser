@@ -1,0 +1,26 @@
+[
+  {
+    "name": "trade_entry_buy",
+    "conditions": [
+      { "contains_any": ["BUY", "LONG"] },
+      { "regex": "(XAUUSD|BTC|ETH)" }
+    ],
+    "action": "store_signal"
+  },
+  {
+    "name": "trade_entry_sell",
+    "conditions": [
+      { "contains_any": ["SELL", "SHORT"] },
+      { "regex": "(XAUUSD|BTC|ETH)" }
+    ],
+    "action": "store_signal"
+  },
+  {
+    "name": "target_detected",
+    "conditions": [
+      { "contains_any": ["TP", "TARGET", "TAKE PROFIT"] },
+      { "min_numbers": 1 }
+    ],
+    "action": "store_signal"
+  }
+]
