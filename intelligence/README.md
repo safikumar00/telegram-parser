@@ -112,6 +112,13 @@ FETCH_RATE_LIMIT_SLEEP=1.0
 
 ## 3 · Running
 
+### Bare module (now works)
+
+```bash
+python -m intelligence                         # same as run_pipeline, mock mode
+python -m intelligence.pipeline --debug        # also works — prints masked env + fetcher info
+```
+
 ### Mock mode (zero creds)
 
 ```bash
@@ -121,22 +128,48 @@ python -m scripts.run_pipeline --source mock --group cryptoDesk
 ### Real Telegram
 
 ```bash
+# First run — interactive terminal required so you can paste the login code
+python -m scripts.list_groups                  # prints all your dialogs (IDs + usernames)
+
 python -m scripts.run_pipeline --source telethon --group @myCryptoChannel
 python -m scripts.fetch_historical --group @myCryptoChannel --until 2026-01-01
 ```
 
-Incremental sync is automatic: every successful message insert advances
-`groups.last_message_id`, so the next run only fetches newer messages. Pass
-`--reset-cursor` to ignore it and backfill.
+> **First-run Telegram login:** Telethon will send a 5-digit code to your
+> Telegram app (not SMS). You MUST paste it in an interactive terminal —
+> piped / non-TTY runs will see `EOFError`. Use `python -m scripts.list_groups`
+> once to create the session; subsequent runs are fully non-interactive.
+
+### Debug mode
+
+```bash
+python -m intelligence --source telethon --group @myChannel --debug
+```
+
+Emits a `loaded settings` log line with every env value, secrets masked:
+
+```
+env_file='/app/intelligence/.env' env_file_loaded=True
+telegram_api_id=12345678 telegram_api_hash='abcd…(32 chars)'
+telegram_phone='+491…(13 chars)' summarizer_enabled=True
+emergent_llm_key='sk-emergen…(30 chars)' rules_dir_exists=True ...
+```
+
+### Strict mode
+
+```bash
+python -m intelligence --source telethon --group @x --strict
+```
+
+Exits with code `2` if Telethon is requested but any of `TELEGRAM_API_ID /
+TELEGRAM_API_HASH / TELEGRAM_PHONE` is missing. Without `--strict` the
+pipeline falls back to mock mode and warns loudly.
 
 ### Tests
 
 ```bash
 python -m pytest tests -q
 ```
-
-Six tests: normalizer, tokenizer, entity extraction, rule engine (AND & OR),
-and a full mock-mode end-to-end pipeline run.
 
 ---
 
@@ -264,8 +297,14 @@ Telethon's own noisy logs are pinned to WARNING.
 
 | Symptom                                    | Likely cause + fix                                                                                    |
 |--------------------------------------------|-------------------------------------------------------------------------------------------------------|
+| `python -m intelligence.pipeline` produces no output | Fixed — module now has a `__main__` that delegates to the CLI. Also `python -m intelligence` works. |
+| `.env` not being picked up                 | Run with `--debug` — the first line shows `env_file_loaded=True/False`. The file must live at `/app/intelligence/.env`. Shell env vars override `.env` by design. |
+| `EOFError: EOF when reading a line` (Telethon) | First-run login code prompt needs an interactive TTY. Run `python -m scripts.list_groups` once from a real shell; after that the session is cached. |
+| Telethon silently falls back to mock       | `--strict` turns the fallback into a hard exit. Pure `--debug` shows `telegram_configured=False` when creds are incomplete. |
+| No DB file created                         | Fixed — `repo.initialize()` now runs in `build_pipeline`, not lazily. Check `stage: db_ready` log line for the path. |
 | `fetched=0 persisted=0` on first run       | Wrong `--group` identifier, or min_message_id too high. Pass `--reset-cursor`.                        |
 | Rule never matches                         | Operator names are case-sensitive in YAML (`contains_any`, not `containsAny`). Check logs for `unknown condition`. |
 | `emergentintegrations` import error        | Either set `SUMMARIZER_ENABLED=false` or `pip install emergentintegrations --extra-index-url https://d33sy5i8bnduwe.cloudfront.net/simple/`. |
 | Telethon flood-wait                        | Fetcher backs off automatically up to 3 retries. Increase `FETCH_RATE_LIMIT_SLEEP` for busier channels. |
+| `summarizer llm call failed: Budget has been exceeded` | Emergent Universal Key ran out of credit — flip `SUMMARIZER_ENABLED=false`, or top up at Profile → Universal Key → Add Balance. The rule engine keeps working regardless. |
 | Duplicate signals                          | Impossible by design — `signals(rule_name, message_id)` is UNIQUE. Any dup means you changed the schema manually. |

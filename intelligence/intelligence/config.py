@@ -1,6 +1,7 @@
 """Configuration loaded from environment — no hardcoded secrets."""
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Optional
 
@@ -8,9 +9,20 @@ from dotenv import load_dotenv
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Load .env next to the project root before Settings is evaluated.
-_ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
-load_dotenv(_ENV_PATH, override=False)
+# Project root = /app/intelligence/
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_ENV_PATH = _PROJECT_ROOT / ".env"
+
+# Load .env explicitly BEFORE Settings is built. `override=False` respects any
+# variable already set by the shell (so `FOO=x python -m …` still wins).
+_ENV_LOADED = load_dotenv(_ENV_PATH, override=False)
+if not _ENV_LOADED:
+    # Emit via module logger — configure_logging() may not have run yet, but
+    # the default stderr handler still catches this.
+    logging.getLogger(__name__).warning(
+        "dotenv: %s not found or empty — relying on shell environment only",
+        _ENV_PATH,
+    )
 
 
 class Settings(BaseSettings):
@@ -85,3 +97,35 @@ class Settings(BaseSettings):
 
 # Singleton settings — import `settings` everywhere.
 settings = Settings()
+
+
+def _mask(value: Optional[str], keep: int = 4) -> str:
+    if value is None:
+        return "<unset>"
+    s = str(value)
+    if len(s) <= keep:
+        return "***"
+    return f"{s[:keep]}…({len(s)} chars)"
+
+
+def settings_summary() -> dict[str, object]:
+    """Return a loggable dict of current settings with secrets masked."""
+    return {
+        "env_file": str(_ENV_PATH),
+        "env_file_loaded": _ENV_LOADED,
+        "project_root": str(_PROJECT_ROOT),
+        "telegram_configured": settings.telegram_configured,
+        "telegram_api_id": settings.telegram_api_id or "<unset>",
+        "telegram_api_hash": _mask(settings.telegram_api_hash),
+        "telegram_phone": _mask(settings.telegram_phone, keep=4),
+        "telegram_session_name": settings.telegram_session_name,
+        "database_url": settings.database_url,
+        "sqlite_path_exists": settings.sqlite_path.exists() if settings.database_url.startswith("sqlite:///") else "n/a",
+        "summarizer_enabled": settings.summarizer_enabled,
+        "summarizer_provider": settings.summarizer_provider,
+        "summarizer_model": settings.summarizer_model,
+        "emergent_llm_key": _mask(settings.emergent_llm_key, keep=10),
+        "rules_dir": settings.rules_dir,
+        "rules_dir_exists": Path(settings.rules_dir).exists(),
+        "log_level": settings.log_level,
+    }

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator
 
 from ..logging_setup import get_logger
 from ..storage.models import Group, Message
@@ -40,8 +40,27 @@ class TelethonFetcher(MessageFetcher):
         self._client = TelegramClient(
             self._session_name, self._api_id, self._api_hash
         )
+        log.info(
+            "telethon connecting",
+            extra={
+                "session": self._session_name,
+                "phone": self._phone,
+                "hint": (
+                    "first run: Telegram will send a login code — run this "
+                    "command in an INTERACTIVE terminal, or pre-create the "
+                    "session with `python -m scripts.list_groups` once."
+                ),
+            },
+        )
         await self._client.start(phone=self._phone)  # type: ignore[func-returns-value]
-        log.info("telethon connected", extra={"session": self._session_name})
+        me = await self._client.get_me()  # type: ignore[attr-defined]
+        log.info(
+            "telethon connected",
+            extra={
+                "session": self._session_name,
+                "as_user": getattr(me, "username", None) or getattr(me, "id", "?"),
+            },
+        )
 
     async def disconnect(self) -> None:
         if self._client is not None:
